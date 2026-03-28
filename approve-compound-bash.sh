@@ -78,11 +78,11 @@ load_prefixes() {
       [[ -f "$file" ]] || continue
       debug "Reading prefixes from: $file"
       jq -r '
-        def extract_prefix: sub("^Bash\\("; "") | sub("( \\*|\\*|:\\*)\\)$"; "") | sub("\\)$"; "");
+        def extract_prefix: sub("^Bash[(]"; "") | sub("( [*]|[*]|:[*])[)]$"; "") | sub("[)]$"; "");
         (.permissions.allow[]? // empty | select(startswith("Bash(")) | "allow:" + extract_prefix),
         (.permissions.deny[]?  // empty | select(startswith("Bash(")) | "deny:"  + extract_prefix)
       ' "$file" 2>/dev/null || true
-    done | sort -u
+    done | tr -d '\r' | sort -u
   )
 }
 
@@ -198,7 +198,7 @@ parse_compound() {
   fi
 
   local raw_commands
-  raw_commands=$(jq -r "$SHFMT_AST_FILTER" <<< "$ast" 2>/dev/null) || return 1
+  raw_commands=$(jq -r "$SHFMT_AST_FILTER" <<< "$ast" 2>/dev/null | tr -d '\r') || return 1
 
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
@@ -341,7 +341,7 @@ main() {
   # Guard: read hook input
   local input command
   input=$(cat)
-  command=$(jq -r '.tool_input.command // empty' <<< "$input")
+  command=$(jq -r '.tool_input.command // empty' <<< "$input" | tr -d '\r')
   [[ -z "$command" ]] && exit 0
 
   debug "Command: $command"
@@ -352,11 +352,11 @@ main() {
     local line
     while IFS= read -r line; do
       [[ -n "$line" ]] && allowed_prefixes+=("$line")
-    done < <(jq -r '.[] | sub("^Bash\\("; "") | sub("( \\*|\\*|:\\*)\\)$"; "") | sub("\\)$"; "")' <<< "$permissions_json" 2>/dev/null)
+    done < <(jq -r '.[] | sub("^Bash[(]"; "") | sub("( [*]|[*]|:[*])[)]$"; "") | sub("[)]$"; "")' <<< "$permissions_json" 2>/dev/null)
     if [[ -n "$deny_json" ]]; then
       while IFS= read -r line; do
         [[ -n "$line" ]] && denied_prefixes+=("$line")
-      done < <(jq -r '.[] | sub("^Bash\\("; "") | sub("( \\*|\\*|:\\*)\\)$"; "") | sub("\\)$"; "")' <<< "$deny_json" 2>/dev/null)
+      done < <(jq -r '.[] | sub("^Bash[(]"; "") | sub("( [*]|[*]|:[*])[)]$"; "") | sub("[)]$"; "")' <<< "$deny_json" 2>/dev/null)
     fi
   else
     load_prefixes
