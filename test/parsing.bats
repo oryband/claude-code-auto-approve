@@ -16,14 +16,19 @@ load test_helper
   assert_commands "cat /etc/hosts"
 }
 
-@test "parse: simple command with redirect (preserved in output)" {
+@test "parse: simple command with write redirect emits sentinel" {
+  # Write-redirects must produce a __WRITE_REDIRECT__ sentinel so the
+  # surrounding command cannot be auto-approved while Claude Code then
+  # runs the full string (including the redirect) on approval.
   run_parse "echo hello > /tmp/out"
-  assert_commands "echo hello > /tmp/out"
+  assert_commands "echo hello" "__WRITE_REDIRECT__ /tmp/out"
 }
 
-@test "parse: simple command with input redirect" {
+@test "parse: simple command with input redirect leaves command intact" {
+  # Read-redirects (< /tmp/in) don't cause file mutation; the command
+  # itself carries the existing permission (e.g. sort *). No sentinel.
   run_parse "sort < /tmp/in"
-  assert_commands "sort < /tmp/in"
+  assert_commands "sort"
 }
 
 # -- pipes --
@@ -186,8 +191,11 @@ load test_helper
 # -- redirections with command substitution --
 
 @test "parse: redirect target with command substitution" {
+  # Inner command substitution is extracted for allow-list matching AND
+  # a write sentinel is emitted for the redirect itself (target rendered
+  # as "$(..)" via get_part_value).
   run_parse 'echo hello > $(evil_cmd)'
-  assert_commands "echo hello" "evil_cmd"
+  assert_commands "echo hello" "evil_cmd" "__WRITE_REDIRECT__ \$(..)"
 }
 
 # -- coproc --

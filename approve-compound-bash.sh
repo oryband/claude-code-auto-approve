@@ -92,10 +92,15 @@ load_prefixes() {
 
 # Returns 0 if the command needs compound parsing (contains shell metacharacters
 # that could hide sub-commands: pipes, chains, semicolons, command substitution,
-# process substitution, backticks).
+# process substitution, backticks, or redirects).
+#
+# Redirects (>, <, >>, <<, <<<, &>, 2>&1, etc.) force the compound path so the
+# AST filter can detect write-redirects. Otherwise commands like
+# `cat file >> ~/.bashrc` would match the simple-command path against prefix
+# "cat" and be auto-approved while the redirect writes arbitrary files.
 needs_compound_parse() {
   # shellcheck disable=SC2016  # $( is a literal pattern, not an expansion
-  [[ "$1" == *['|&;`']* || "$1" == *'$('* || "$1" == *'<('* || "$1" == *'>('* ]]
+  [[ "$1" == *['|&;`<>']* || "$1" == *'$('* ]]
 }
 
 # read returns 1 on EOF before delimiter; || true prevents exit under pipefail
@@ -137,6 +142,32 @@ def get_command_string:
   else empty
   end;
 
+# shfmt encodes redirect operators as integers. Write-class ops that can
+# create, truncate, or append arbitrary files are:
+#   63=>, 64=>>, 69=>|, 74=&>, 76=&>>
+# Op 68 is >& which is fd-dup when the rhs is a pure integer (2>&1, safe)
+# and a file-redirect otherwise (>& /path, unsafe).
+#
+# A command like `cat file >> ~/.bashrc` parses as a Stmt whose Cmd is the
+# CallExpr `cat file` with a Redir `>> ~/.bashrc` attached. extract_commands
+# previously emitted only "cat file", which would match a Bash(cat *) allow
+# prefix and auto-approve the whole line — but Claude Code then runs the full
+# original including the redirect, writing ~/.bashrc.
+#
+# redirect_sentinels emits a "__WRITE_REDIRECT__ <target>" string for every
+# write-class redirect attached to a Stmt. That sentinel cannot match any
+# Bash(...) prefix, so all_allowed fails and the command falls through to
+# Claude Code's native permission prompt.
+def redirect_sentinels:
+  (.Redirs[]?
+    | select(.Op | . == 63 or . == 64 or . == 69 or . == 74 or . == 76)
+    | "__WRITE_REDIRECT__ " + ([.Word.Parts[]? | get_part_value] | join(""))),
+  (.Redirs[]?
+    | select(.Op == 68)
+    | ([.Word.Parts[]? | get_part_value] | join("")) as $target
+    | select($target | test("^[0-9]+$") | not)
+    | "__WRITE_REDIRECT__ " + $target);
+
 def extract_commands:
   if type == "object" then
     if .Type == "CallExpr" then
@@ -167,7 +198,8 @@ def extract_commands:
       (.Args[]?.Array?.Elems[]?.Value | find_cmd_substs | .Stmts[]? | extract_commands)
     elif .Cmd then
       (.Cmd | extract_commands),
-      (.Redirs[]?.Word | find_cmd_substs | .Stmts[]? | extract_commands)
+      (.Redirs[]?.Word | find_cmd_substs | .Stmts[]? | extract_commands),
+      redirect_sentinels
     elif .Stmts then
       (.Stmts[] | extract_commands)
     else
