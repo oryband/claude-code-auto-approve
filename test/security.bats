@@ -149,6 +149,91 @@ load test_helper
   assert_fallthrough
 }
 
+# -- write-redirect bypass (patched 2026-04) --
+#
+# Without the redirect-sentinel patch, a command like `cat file >> ~/.bashrc`
+# would match prefix "cat" in the allow list and be auto-approved — but
+# Claude Code then runs the full string including the redirect. These tests
+# pin down the fix: write-redirects must never auto-approve, even when the
+# command name is allowlisted.
+
+@test "sec/redir: > overwrites blocked when command name allowed" {
+  run_hook "ls > /etc/passwd" '["Bash(ls *)"]'
+  assert_fallthrough
+}
+
+@test "sec/redir: : > truncates blocked when : is allowed" {
+  run_hook ": > ~/.ssh/authorized_keys" '["Bash(: *)","Bash(:)"]'
+  assert_fallthrough
+}
+
+@test "sec/redir: echo >> appends blocked when echo is allowed" {
+  run_hook "echo 'ssh-rsa AAAA' >> ~/.ssh/authorized_keys" '["Bash(echo *)"]'
+  assert_fallthrough
+}
+
+@test "sec/redir: cat with read+write redirects blocked" {
+  run_hook "cat < /etc/shadow > /tmp/stolen" '["Bash(cat *)"]'
+  assert_fallthrough
+}
+
+@test "sec/redir: cat >> bashrc blocked when cat is allowed" {
+  run_hook "cat file >> ~/.bashrc" '["Bash(cat *)"]'
+  assert_fallthrough
+}
+
+@test "sec/redir: write in compound blocks whole compound" {
+  run_hook "echo done && cat secret > /tmp/stolen" '["Bash(echo *)","Bash(cat *)"]'
+  assert_fallthrough
+}
+
+@test "sec/redir: write at end of compound blocks whole compound" {
+  run_hook "cat file >> ~/.bashrc && echo done" '["Bash(cat *)","Bash(echo *)"]'
+  assert_fallthrough
+}
+
+@test "sec/redir: >& to file blocked" {
+  run_hook "echo evil >& /tmp/x" '["Bash(echo *)"]'
+  assert_fallthrough
+}
+
+@test "sec/redir: &> blocked" {
+  run_hook "ls &> /tmp/out" '["Bash(ls *)"]'
+  assert_fallthrough
+}
+
+@test "sec/redir: &>> blocked" {
+  run_hook "ls &>> /tmp/out" '["Bash(ls *)"]'
+  assert_fallthrough
+}
+
+@test "sec/redir: >| force-clobber blocked" {
+  run_hook "ls >| /tmp/out" '["Bash(ls *)"]'
+  assert_fallthrough
+}
+
+# -- write-redirect FALSE POSITIVES that must still auto-approve --
+
+@test "sec/redir: 2>&1 fd-dup is not a file write (approved)" {
+  run_hook "cargo test 2>&1 | tail -10" '["Bash(cargo test *)","Bash(tail *)"]'
+  assert_approved
+}
+
+@test "sec/redir: >&2 fd-dup is not a file write (approved)" {
+  run_hook "echo hi >&2" '["Bash(echo *)"]'
+  assert_approved
+}
+
+@test "sec/redir: > inside quotes is literal string (approved)" {
+  run_hook 'echo "a > b"' '["Bash(echo *)"]'
+  assert_approved
+}
+
+@test "sec/redir: read redirect < does not block (approved)" {
+  run_hook "sort < /tmp/in" '["Bash(sort *)"]'
+  assert_approved
+}
+
 # -- input validation --
 
 @test "sec: empty JSON input falls through" {
