@@ -78,11 +78,11 @@ load_prefixes() {
       [[ -f "$file" ]] || continue
       debug "Reading prefixes from: $file"
       jq -r '
-        def extract_prefix: sub("^Bash\\("; "") | sub("( \\*|\\*|:\\*)\\)$"; "") | sub("\\)$"; "");
+        def extract_prefix: sub("^Bash[(]"; "") | sub("( [*]|[*]|:[*])[)]$"; "") | sub("[)]$"; "");
         (.permissions.allow[]? // empty | select(startswith("Bash(")) | "allow:" + extract_prefix),
         (.permissions.deny[]?  // empty | select(startswith("Bash(")) | "deny:"  + extract_prefix)
       ' "$file" 2>/dev/null || true
-    done | sort -u
+    done | tr -d '\r' | sort -u
   )
 }
 
@@ -203,6 +203,7 @@ parse_compound() {
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     # Recursively expand bash -c / sh -c
+    line="${line%$'\r'}"  # strip trailing CR for Windows compatibility
     if [[ "$line" =~ ^(env[[:space:]]+)?(/[^[:space:]]*/)?((ba)?sh)[[:space:]]+-c[[:space:]]*[\'\"](.*)[\'\"]$ ]]; then
       debug "Recursing into shell -c: ${BASH_REMATCH[5]}"
       if ! parse_compound "${BASH_REMATCH[5]}"; then
@@ -352,11 +353,11 @@ main() {
     local line
     while IFS= read -r line; do
       [[ -n "$line" ]] && allowed_prefixes+=("$line")
-    done < <(jq -r '.[] | sub("^Bash\\("; "") | sub("( \\*|\\*|:\\*)\\)$"; "") | sub("\\)$"; "")' <<< "$permissions_json" 2>/dev/null)
+    done < <(jq -r '.[] | sub("^Bash[(]"; "") | sub("( [*]|[*]|:[*])[)]$"; "") | sub("[)]$"; "")' <<< "$permissions_json" 2>/dev/null)
     if [[ -n "$deny_json" ]]; then
       while IFS= read -r line; do
         [[ -n "$line" ]] && denied_prefixes+=("$line")
-      done < <(jq -r '.[] | sub("^Bash\\("; "") | sub("( \\*|\\*|:\\*)\\)$"; "") | sub("\\)$"; "")' <<< "$deny_json" 2>/dev/null)
+      done < <(jq -r '.[] | sub("^Bash[(]"; "") | sub("( [*]|[*]|:[*])[)]$"; "") | sub("[)]$"; "")' <<< "$deny_json" 2>/dev/null)
     fi
   else
     load_prefixes
